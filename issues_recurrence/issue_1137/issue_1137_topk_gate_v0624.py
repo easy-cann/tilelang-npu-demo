@@ -1,4 +1,6 @@
 import os
+import pytest
+import numpy as np
 import torch
 import tilelang
 import tilelang.language as T
@@ -8,7 +10,8 @@ pass_configs = {
   tilelang.PassConfigKey.TL_ASCEND_AUTO_SYNC: True
 }
 
-@tilelang.jit(pass_configs=pass_configs)
+@tilelang.jit(pass_configs=pass_configs, target="pto")
+# @tilelang.jit(pass_configs=pass_configs)
 def get_topk_gate_kernel(num_experts: int, num_topk: int):
     num_tokens = T.symbolic('num_tokens')
     num_threads = 32
@@ -178,3 +181,49 @@ def topk_gate(scores: torch.Tensor, num_topk: int) -> torch.Tensor:
 
     kernel(scores, topk_idx)
     return topk_idx
+
+
+def stable_topk(scores: torch.Tensor, num_topk: int) -> torch.Tensor:
+    _, sorted_indices = torch.sort(scores, dim=1, descending=True, stable=True)
+    return sorted_indices[:, :num_topk].to(torch.int32).contiguous()
+
+
+def generate_test_params():
+    return [
+        {"num_tokens": 1, "num_experts": 4, "num_topk": 1},
+        # {"num_tokens": 5, "num_experts": 8, "num_topk": 2},
+        # {"num_tokens": 32, "num_experts": 10, "num_topk": 3},
+        # {"num_tokens": 63, "num_experts": 32, "num_topk": 4},
+        # {"num_tokens": 128, "num_experts": 12, "num_topk": 6},
+    ]
+
+
+def make_param_id(params: dict) -> str:
+    nt = params["num_tokens"]
+    ne = params["num_experts"]
+    nk = params["num_topk"]
+    return f"tokens={nt}_experts={ne}_topk={nk}"
+
+
+@pytest.mark.parametrize('params', generate_test_params(), ids=make_param_id)
+def test_topk_gate(params):
+    num_tokens = params['num_tokens']
+    num_experts = params['num_experts']
+    num_topk = params['num_topk']
+
+    torch.manual_seed(42)
+    scores = torch.rand((num_tokens, num_experts), dtype=torch.float32) * 20 - 10
+    if hasattr(torch, "npu") and torch.npu.is_available():
+        scores = scores.to("npu").contiguous()
+    elif torch.cuda.is_available():
+        scores = scores.to("cuda").contiguous()
+
+    topk_idx_ref = stable_topk(scores, num_topk)
+    topk_idx = topk_gate(scores, num_topk)
+
+    np.testing.assert_equal(topk_idx.cpu().numpy(), topk_idx_ref.cpu().numpy())
+    print(f"Test passed for params: {make_param_id(params)}")
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-sv"])
