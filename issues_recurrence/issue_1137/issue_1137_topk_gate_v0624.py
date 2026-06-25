@@ -188,11 +188,12 @@ def stable_topk(scores: torch.Tensor, num_topk: int) -> torch.Tensor:
 
 def generate_test_params():
     return [
-        {"num_tokens": 1, "num_experts": 4, "num_topk": 1},
+        # {"num_tokens": 1, "num_experts": 4, "num_topk": 1},
         # {"num_tokens": 5, "num_experts": 8, "num_topk": 2},
         # {"num_tokens": 32, "num_experts": 10, "num_topk": 3},
         # {"num_tokens": 63, "num_experts": 32, "num_topk": 4},
         # {"num_tokens": 128, "num_experts": 12, "num_topk": 6},
+        {"num_tokens": 8001, "num_experts": 256, "num_topk": 8},
     ]
 
 
@@ -211,12 +212,12 @@ def test_topk_gate(params):
 
     torch.manual_seed(42)
     scores = torch.rand((num_tokens, num_experts), dtype=torch.float32) * 20 - 10
+    topk_idx_ref = stable_topk(scores, num_topk)
     if hasattr(torch, "npu") and torch.npu.is_available():
         scores = scores.to("npu").contiguous()
     elif torch.cuda.is_available():
         scores = scores.to("cuda").contiguous()
 
-    topk_idx_ref = stable_topk(scores, num_topk)
     topk_idx = topk_gate(scores, num_topk)
 
     np.testing.assert_equal(topk_idx.cpu().numpy(), topk_idx_ref.cpu().numpy())
